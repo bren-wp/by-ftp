@@ -20,12 +20,16 @@ def payload_members() -> dict[str, bytes]:
     return members
 
 
+def manifest_for(members: dict[str, bytes], *, corrupt: str | None = None) -> str:
+    lines = []
+    for name, data in sorted(members.items()):
+        digest = "0" * 64 if name == corrupt else hashlib.sha256(data).hexdigest()
+        lines.append(f"{digest}  {name}")
+    return "\n".join(lines) + "\n"
+
+
 def write_bundle(path: Path, members: dict[str, bytes], *, manifest_override: str | None = None) -> None:
-    manifest = manifest_override
-    if manifest is None:
-        manifest = "\n".join(
-            f"{hashlib.sha256(data).hexdigest()}  {name}" for name, data in sorted(members.items())
-        ) + "\n"
+    manifest = manifest_override if manifest_override is not None else manifest_for(members)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for name, data in members.items():
             zf.writestr(name, data)
@@ -43,10 +47,7 @@ class VerifyBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bundle.zip"
             members = payload_members()
-            write_bundle(path, members)
-            # Izmjena nakon generiranja manifesta mora biti otkrivena.
-            with zipfile.ZipFile(path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("README.md", b"izmijenjeno")
+            write_bundle(path, members, manifest_override=manifest_for(members, corrupt="README.md"))
             with self.assertRaises(ValueError):
                 verify_bundle(path, VERSION)
 
@@ -54,7 +55,7 @@ class VerifyBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bundle.zip"
             members = payload_members()
-            members["../izlaz.txt"] = b"ne smije proći"
+            members["../izlaz.txt"] = "ne smije proći".encode("utf-8")
             write_bundle(path, members)
             with self.assertRaises(ValueError):
                 verify_bundle(path, VERSION)
@@ -64,11 +65,8 @@ class VerifyBundleTests(unittest.TestCase):
             path = Path(tmp) / "bundle.zip"
             members = payload_members()
             original = dict(members)
-            members["neocekivano.txt"] = b"višak"
-            manifest = "\n".join(
-                f"{hashlib.sha256(data).hexdigest()}  {name}" for name, data in sorted(original.items())
-            ) + "\n"
-            write_bundle(path, members, manifest_override=manifest)
+            members["neocekivano.txt"] = "višak".encode("utf-8")
+            write_bundle(path, members, manifest_override=manifest_for(original))
             with self.assertRaises(ValueError):
                 verify_bundle(path, VERSION)
 
